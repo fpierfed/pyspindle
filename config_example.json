@@ -1,0 +1,18 @@
+{
+    "wifi": {
+        "ssid": "",
+        "password": ""
+    },
+    "mqtt": {
+        "broker": "",
+        "username": "",
+        "password": "",
+        "ssl": false
+    },
+    "num_samples": 10,
+    "calibrate": true,
+    "sleep_time": 10,
+    "scl_pin": 5,
+    "sda_pin": 4,
+    "mpu6050_addr": b"\x68"
+}
