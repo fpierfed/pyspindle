@@ -1,4 +1,4 @@
-from machine import I2C, Pin
+from machine import I2C, Pin, RTC, DEEPSLEEP, deepsleep
 import time
 import math
 
@@ -19,6 +19,7 @@ GYRO_XOUT_H = 0x43
 GYRO_YOUT_H = 0x45
 GYRO_ZOUT_H = 0x47
 TEMP_OUT_H = 0X41
+NUM_SAMPLES = 10
 
 calib_x_accel = 0.
 calib_y_accel = 0.
@@ -44,7 +45,7 @@ def MPU_Init(i2c):
     i2c.writeto_mem(DeviceAddress, ACCEL_CONFIG, b'\x18')
 
     # Write to interrupt: 1 to enable interrupts, 0 to disable them
-    i2c.writeto_mem(DeviceAddress, INT_ENABLE, b'\x01')
+    i2c.writeto_mem(DeviceAddress, INT_ENABLE, b'\x00')
 
 
 def read_raw_data(i2c, addr):
@@ -76,15 +77,15 @@ def calibrate(i2c):
     read_raw_data(i2c, ACCEL_ZOUT_H)
 
     # Read and average the raw values from the IMU
-    for int in range(10):
+    for int in range(NUM_SAMPLES):
         x_accel += read_raw_data(i2c, ACCEL_XOUT_H)
         y_accel += read_raw_data(i2c, ACCEL_YOUT_H)
         z_accel += read_raw_data(i2c, ACCEL_ZOUT_H)
         time.sleep_ms(100)
 
-    x_accel /= 10
-    y_accel /= 10
-    z_accel /= 10
+    x_accel /= NUM_SAMPLES
+    y_accel /= NUM_SAMPLES
+    z_accel /= NUM_SAMPLES
 
     # Store the raw calibration values globally
     calib_x_accel = x_accel
@@ -93,23 +94,39 @@ def calibrate(i2c):
     print(calib_x_accel, calib_y_accel, calib_z_accel)
 
 
+i = 0
 i2c = I2C(scl=Pin(5), sda=Pin(4), freq=400000)
 MPU_Init(i2c)
 calibrate(i2c)
-
 while True:
-    # We do not rescale the z component: at rest on a slat surface we expect
-    # the x and y component of acceleration to be 0. We expect the z component
-    # to be 1g exactly.
-    acc = [
-        read_raw_data(i2c, ACCEL_XOUT_H) - calib_x_accel,
-        read_raw_data(i2c, ACCEL_YOUT_H) - calib_y_accel,
-        read_raw_data(i2c, ACCEL_ZOUT_H),
-    ]
-    temp = read_raw_data(i2c, TEMP_OUT_H) / 340 + 36.53
+    i += 1
 
-    modulus = math.sqrt(sum([a * a for a in acc]))
-    tilt = math.acos(acc[2] / modulus) * radToDeg
+    tilts = []
+    for _ in range(NUM_SAMPLES):
+        # We do not rescale the z component: at rest on a flat surface we
+        # expect the x and y component of acceleration to be 0. We expect the z
+        # component to be 1g exactly.
+        acc = [
+            read_raw_data(i2c, ACCEL_XOUT_H) - calib_x_accel,
+            read_raw_data(i2c, ACCEL_YOUT_H) - calib_y_accel,
+            read_raw_data(i2c, ACCEL_ZOUT_H),
+        ]
+        temp = read_raw_data(i2c, TEMP_OUT_H) / 340 + 36.53
 
+        modulus = math.sqrt(sum([a * a for a in acc]))
+        tilts.append(math.acos(acc[2] / modulus) * radToDeg)
+        time.sleep_ms(10)
+
+    tilts.sort()
+    if NUM_SAMPLES % 2 == 0:
+        tilt = (tilts[NUM_SAMPLES // 2] + tilts[NUM_SAMPLES // 2 - 1]) / 2.
+    else:
+        tilt = tilts[NUM_SAMPLES // 2]
     print('Tilt: %.2f  Temp: %.2f C' % (tilt, temp))
-    time.sleep_ms(500)
+    time.sleep_ms(1000)
+
+    if i > NUM_SAMPLES:
+        rtc = RTC()
+        rtc.irq(trigger=rtc.ALARM0, wake=DEEPSLEEP)
+        rtc.alarm(RTC.ALARM0, 10000)
+        deepsleep()
